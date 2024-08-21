@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SPCC Demo</title>
+    <script src="https://cdn.shopify.com/shopifycloud/shop-js/shop-pay-payment-request.js"></script>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        height: 100vh;
+        margin: 0;
+        background-color: #f0f0f0;
+      }
+      .container {
+        background-color: white;
+        padding: 2rem;
+        border-radius: 8px;
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+      }
+      h1 {
+        text-align: center;
+        color: #333;
+      }
+      #email-input {
+        width: 100%;
+        padding: 0.5rem;
+        margin-bottom: 1rem;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1>SPCC Demo</h1>
+      <div id="shop-pay-button-container"></div>
+      <div id="shop-pay-login-container">
+        <input type="email" id="email-input" placeholder="Enter your email" />
+      </div>
+    </div>
+    <script>
+      window.ShopPay.PaymentRequest.configure({
+        shopId: 84206321686,
+        clientId: "aafb79-1d.myshopify.com", // Replace with your actual ngrok URL
+        debug: true,
+        onAnalyticsEvent: (event) => {
+          console.log("Analytics event:", event);
+        },
+      });
+
+      window.ShopPay.PaymentRequest.createButton().render(
+        "#shop-pay-button-container"
+      );
+      window.ShopPay.PaymentRequest.createLogin({
+        emailInputId: "email-input",
+      }).render("#shop-pay-login-container");
+
+      const initialPaymentRequest = window.ShopPay.PaymentRequest.build({
+        lineItems: [
+          {
+            label: "Demo Product",
+            finalItemPrice: {
+              amount: "10.00",
+              currencyCode: "USD",
+            },
+            quantity: 1,
+            sku: "demo-sku",
+            requiresShipping: true,
+            finalLinePrice: {
+              amount: "10.00",
+              currencyCode: "USD",
+            },
+          },
+        ],
+        subtotal: {
+          amount: "10.00",
+          currencyCode: "USD",
+        },
+        totalTax: {
+          amount: "1.00",
+          currencyCode: "USD",
+        },
+        total: {
+          amount: "11.00",
+          currencyCode: "USD",
+        },
+        presentmentCurrency: "USD",
+        locale: "en",
+      });
+
+      const session = window.ShopPay.PaymentRequest.createSession({
+        paymentRequest: initialPaymentRequest,
+      });
+
+      session.addEventListener("sessionrequested", (ev) => {
+        console.log("Session requested");
+        fetch("/create-session", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ paymentRequest: initialPaymentRequest }),
+        })
+          .then((response) => {
+            if (!response.ok) {
+              throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            return response.json();
+          })
+          .then((data) => {
+            console.log("Session created:", data);
+            const { token, checkoutUrl, sourceIdentifier } = data;
+            session.completeSessionRequest({
+              token,
+              checkoutUrl,
+              sourceIdentifier,
+              updatedPaymentRequest: initialPaymentRequest,
+            });
+          })
+          .catch((error) => {
+            console.error("Error:", error);
+          });
+      });
+
+      [
+        "deliverymethodtypechanged",
+        "shippingaddresschanged",
+        "deliverymethodchanged",
+        "pickuplocationchanged",
+        "pickuplocationfilterchanged",
+        "discountcodechanged",
+        "paymentconfirmationrequested",
+        "paymentcomplete",
+        "windowclosed",
+      ].forEach((eventName) => {
+        session.addEventListener(eventName, (ev) => {
+          console.log(`Event '${eventName}' triggered:`, ev);
+        });
+      });
+
+      session.addEventListener("deliverymethodtypechanged", async (ev) => {
+        const currentPaymentRequest = session.paymentRequest;
+        const deliveryMethodType = ev.deliveryMethodType;
+        let pickupLocations = [];
+        if (deliveryMethodType === "PICKUP") {
+          pickupLocations = await fetchPickupLocations();
+        }
+        const updatedPaymentRequest = window.ShopPay.PaymentRequest.build({
+          ...currentPaymentRequest,
+          pickupLocations,
+        });
+        session.completeDeliveryMethodTypeChange({
+          updatedPaymentRequest: updatedPaymentRequest,
+        });
+      });
+
+      session.addEventListener("shippingaddresschanged", async (ev) => {
+        const currentPaymentRequest = session.paymentRequest;
+        const selectedAddress = ev.shippingAddress;
+        const updatedPaymentRequest = window.ShopPay.PaymentRequest.build({
+          ...currentPaymentRequest,
+          deliveryMethods: [
+            {
+              label: "Standard",
+              amount: {
+                amount: 10.0,
+                currencyCode: "USD",
+              },
+              code: "STANDARD",
+              minDeliveryDate: "2024-01-01",
+              maxDeliveryDate: "2027-01-01",
+            },
+            {
+              label: "Express",
+              amount: {
+                amount: 20.0,
+                currencyCode: "USD",
+              },
+              code: "EXPRESS",
+              minDeliveryDate: "2024-01-01",
+              maxDeliveryDate: "2026-01-01",
+            },
+          ],
+        });
+        session.completeShippingAddressChange({
+          updatedPaymentRequest: updatedPaymentRequest,
+        });
+      });
+
+      session.addEventListener("deliverymethodchanged", async (ev) => {
+        const currentPaymentRequest = session.paymentRequest;
+        const selectedDeliveryMethod = ev.deliveryMethod;
+        let updatedRequestValues;
+        if (selectedDeliveryMethod) {
+          updatedRequestValues = {
+            shippingLines: [
+              {
+                label: selectedDeliveryMethod.label,
+                amount: selectedDeliveryMethod.amount,
+                code: selectedDeliveryMethod.code,
+              },
+            ],
+            totalShippingPrice: {
+              finalTotal: {
+                amount: selectedDeliveryMethod.amount.amount,
+                currencyCode: "USD",
+              },
+            },
+            total: {
+              amount: 20 + selectedDeliveryMethod.amount.amount,
+              currencyCode: "USD",
+            },
+          };
+        } else {
+          updatedRequestValues = {
+            total: {
+              amount: 20,
+              currencyCode: "USD",
+            },
+          };
+        }
+        const updatedPaymentRequest = window.ShopPay.PaymentRequest.build({
+          ...currentPaymentRequest,
+          ...updatedRequestValues,
+        });
+        session.completeDeliveryMethodChange({
+          updatedPaymentRequest: updatedPaymentRequest,
+        });
+      });
+
+      session.addEventListener("pickuplocationchanged", async (ev) => {
+        const currentPaymentRequest = session.paymentRequest;
+        const pickupLocation = ev.pickupLocation;
+        const updatedPaymentRequest = window.ShopPay.PaymentRequest.build({
+          ...currentPaymentRequest,
+          totalShippingPrice: {
+            finalTotal: {
+              amount: pickupLocation.amount.amount,
+              currencyCode: "USD",
+            },
+          },
+          total: {
+            amount: 20 + pickupLocation.amount.amount,
+            currencyCode: "USD",
+          },
+        });
+        session.completePickupLocationChange({
+          updatedPaymentRequest: updatedPaymentRequest,
+        });
+      });
+
+      session.addEventListener("pickuplocationfilterchanged", async (ev) => {
+        const currentPaymentRequest = session.paymentRequest;
+        const buyerLocation = ev.buyerLocation;
+        const updatedPaymentRequest = window.ShopPay.PaymentRequest.build({
+          ...currentPaymentRequest,
+          pickupLocations: [
+            {
+              label: "620 King Street West",
+              code: "PICK_UP-KING-STREET-WEST",
+              detail: "620 King Street West, Toronto, ON",
+              amount: {
+                amount: 10.0,
+                currencyCode: "USD",
+              },
+              readyExpectationLabel: "Ready in 1 hour",
+              proximityLabel: "Less than 1 km away",
+            },
+          ],
+        });
+        session.completePickupLocationFilterChange({
+          updatedPaymentRequest: updatedPaymentRequest,
+        });
+      });
+
+      session.addEventListener("discountcodechanged", async (ev) => {
+        const currentPaymentRequest = session.paymentRequest;
+        const selectedDiscountCodes = ev.discountCodes;
+        const updatedPaymentRequest = window.ShopPay.PaymentRequest.build({
+          ...currentPaymentRequest,
+          discountCodes: selectedDiscountCodes,
+          lineItems: [
+            {
+              label: "T-Shirt",
+              finalItemPrice: {
+                amount: 10.0,
+                currencyCode: "USD",
+              },
+              quantity: 2,
+              sku: "t-shirt",
+              requiresShipping: true,
+              finalLinePrice: {
+                amount: 20.0,
+                currencyCode: "USD",
+              },
+            },
+          ],
+          subtotal: {
+            amount: 20.0,
+            currencyCode: "USD",
+          },
+          discounts: [
+            {
+              label: "15% off",
+              amount: {
+                amount: 3.0,
+                currencyCode: "USD",
+              },
+            },
+          ],
+          totalTax: {
+            amount: 1.06,
+            currencyCode: "USD",
+          },
+          total: {
+            amount: 18.06,
+            currencyCode: "USD",
+          },
+        });
+        session.completeDiscountCodeChange({
+          updatedPaymentRequest: updatedPaymentRequest,
+        });
+      });
+
+      session.addEventListener("paymentconfirmationrequested", async (_ev) => {
+        console.log("Payment confirmation requested", _ev);
+        fetch("/submit-payment", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            token: session.token,
+            paymentRequest: session.paymentRequest,
+          }),
+        })
+          .then((response) => {
+            if (!response.ok) {
+              throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            return response.json();
+          })
+          .then((data) => {
+            console.log("Payment submission response:", data);
+            if (data.success) {
+              session.completePaymentConfirmationRequest();
+            } else {
+              session.completePaymentConfirmationRequest({
+                errors: [
+                  {
+                    type: "generalError",
+                    message:
+                      data.error ||
+                      "Payment processing failed. Please try again.",
+                  },
+                ],
+              });
+            }
+          })
+          .catch((error) => {
+            console.error("Error submitting payment:", error);
+            session.completePaymentConfirmationRequest({
+              errors: [
+                {
+                  type: "generalError",
+                  message:
+                    "An error occurred while processing your payment. Please try again.",
+                },
+              ],
+            });
+          });
+      });
+
+      session.addEventListener("paymentcomplete", async (ev) => {
+        console.log("Payment complete event:", ev);
+        if (ev.processingStatus.status === "completed") {
+          session.close();
+          // You might want to redirect to a thank you page here
+          window.location.href = "/thank-you";
+        } else {
+          alert("Payment failed. Please try again.");
+        }
+      });
+
+      session.addEventListener("windowclosed", async () => {
+        console.log("Shop Pay window closed");
+      });
+
+      // Helper function to fetch pickup locations (you need to implement this)
+      async function fetchPickupLocations() {
+        // Implement logic to fetch pickup locations
+        return [
+          {
+            label: "Store 1",
+            code: "STORE_1",
+            detail: "123 Main St, City, State",
+            amount: {
+              amount: 0.0,
+              currencyCode: "USD",
+            },
+            readyExpectationLabel: "Ready in 2 hours",
+            proximityLabel: "5 miles away",
+          },
+          // Add more pickup locations as needed
+        ];
+      }
+    </script>
+  </body>
+</html>
