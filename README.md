@@ -52,7 +52,7 @@ This project is a simple Node.js server that interacts with a Shopify store usin
    ngrok http --domain=YOUR_PUBLIC_DOMAIN.ngrok-free.app 3000
    ```
 
-3. Access the frontend by opening `public/index.htm` in your browser.
+3. Access the frontend by opening your ngrok domain in your browser.
 
 ## Endpoints
 
